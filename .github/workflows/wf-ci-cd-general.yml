@@ -44,7 +44,7 @@ jobs:
       - name: Clone external base chart repo
         run: |
           git clone https://github.com/EPIIS/unsaac-devops-templates.git
-          cp -r helm-base-chart/_base charts/_base
+          cp -r unsaac-devops-templates/helm-base-chart/_base charts/_base
 
       - name: Install yq
         run: |
