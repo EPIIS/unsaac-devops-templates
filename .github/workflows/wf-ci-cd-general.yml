@@ -70,16 +70,16 @@ jobs:
 
           VALUES_FILE="charts/${NAME}/values.yaml"
 
-          yq eval -i ".namespace = \"${NAME}\"" "$VALUES_FILE"
-          yq eval -i ".deployment.name = \"${NAME}-deployment\"" "$VALUES_FILE"
-          yq eval -i ".deployment.namespace = \"${NAME}\"" "$VALUES_FILE"
-          yq eval -i ".image.repository = \"localhost:5000/${NAME}\"" "$VALUES_FILE"
-          yq eval -i ".image.tag = \"${IMAGE_VERSION}\"" "$VALUES_FILE"
-          yq eval -i ".image.containerPort = ${IMAGE_PORT}" "$VALUES_FILE"
-          yq eval -i ".service.name = \"${NAME}-service\"" "$VALUES_FILE"
-          yq eval -i ".service.port = ${SERVICE_PORT}" "$VALUES_FILE"
-          yq eval -i ".ingress.name = \"${NAME}-ingress\"" "$VALUES_FILE"
-          yq eval -i ".ingress.path = \"${INGRESS_PATH}\"" "$VALUES_FILE"
+          yq eval -i -y ".namespace = \"${NAME}\"" "$VALUES_FILE"
+          yq eval -i -y ".deployment.name = \"${NAME}-deployment\"" "$VALUES_FILE"
+          yq eval -i -y ".deployment.namespace = \"${NAME}\"" "$VALUES_FILE"
+          yq eval -i -y ".image.repository = \"localhost:5000/${NAME}\"" "$VALUES_FILE"
+          yq eval -i -y ".image.tag = \"${IMAGE_VERSION}\"" "$VALUES_FILE"
+          yq eval -i -y ".image.containerPort = ${IMAGE_PORT}" "$VALUES_FILE"
+          yq eval -i -y ".service.name = \"${NAME}-service\"" "$VALUES_FILE"
+          yq eval -i -y ".service.port = ${SERVICE_PORT}" "$VALUES_FILE"
+          yq eval -i -y ".ingress.name = \"${NAME}-ingress\"" "$VALUES_FILE"
+          yq eval -i -y ".ingress.path = \"${INGRESS_PATH}\"" "$VALUES_FILE"
 
           cat "$VALUES_FILE"
 
