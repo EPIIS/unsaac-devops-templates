@@ -56,6 +56,7 @@ jobs:
         run: |
           NAME="${{ inputs.name }}"
           cp -r charts/_base charts/${NAME}
+          ls -l charts/${NAME}
           echo "Copiado el chart base a charts/${NAME}"
 
       - name: Setear versión de imagen (short SHA)
