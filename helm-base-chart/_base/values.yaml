@@ -1,0 +1,34 @@
+namespace: tfunsaac
+
+deployment:
+  name: tfunsaac-deployment
+
+image:
+  name: tfunsaac
+  repository: localhost:5000/tfunsaac
+  tag: "latest"
+  pullPolicy: IfNotPresent
+  containerPort: 3000
+
+replicaCount: 1
+
+service:
+  name: tfunsaac-service
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  name: tfunsaac-ingress
+  className: "nginx"
+  host: epiis.unsaac.edu.pe
+  path: /tfunsaac
+  pathType: Prefix
+
+resources: {}
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
