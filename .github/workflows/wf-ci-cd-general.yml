@@ -151,7 +151,7 @@ jobs:
             cd "$SERVER_PATH/helm/$IMAGE_NAME"
           
             # Extraer el namespace usando yq
-            NAMESPACE=\$(yq eval '.namespace' values.yaml)
+            NAMESPACE=\$(grep '^namespace:' values.yaml | awk '{print \$2}')
             echo "✅ Namespace: \$NAMESPACE"
             echo "✅ Image name: $IMAGE_NAME"
             echo "✅ Image version: $IMAGE_VERSION"
