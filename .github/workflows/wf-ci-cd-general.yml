@@ -183,6 +183,34 @@ jobs:
               --set image.tag="$IMAGE_VERSION"
           EOF
 
+      - name: Verify Deploy
+        env:
+          IMAGE_NAME: ${{ inputs.name }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST bash << EOF
+            set -e
+          
+            echo "✅ Iniciando verificación post-deploy..."
+          
+            NAMESPACE=\$(grep '^namespace:' $SERVER_PATH/helm/$IMAGE_NAME/values.yaml | awk '{print \$2}')
+            DEPLOYMENT_NAME="\$IMAGE_NAME-deployment"
+          
+            echo "🔎 1) Helm release status"
+            helm status "\$IMAGE_NAME" -n "\$NAMESPACE"
+          
+            echo "🔎 2) Checking pods health"
+            NOT_RUNNING=\$(kubectl get pods -n "\$NAMESPACE" --no-headers | awk '{if(\$3 != "Running" && \$3 != "Completed") print}')
+            if [ ! -z "\$NOT_RUNNING" ]; then
+              echo "❌ Found pods not running:"
+              echo "\$NOT_RUNNING"
+              exit 1
+            else
+              echo "✅ All pods are running fine!"
+            fi
+          
+            echo "✅ Deploy verification completed successfully."
+          EOF
 
 #      ### FULLSTACK
 #      - name: Build y save Docker image (frontend y backend)
