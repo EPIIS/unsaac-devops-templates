@@ -46,7 +46,14 @@ jobs:
           git clone https://github.com/EPIIS/unsaac-devops-templates.git
           mkdir -p charts
           cp -r unsaac-devops-templates/helm-base-chart/_base charts/_base
-
+      - name: Debug secret
+        run: |
+          if [ -z "${{ secrets.SSH_PASSWORD }}" ]; then
+            echo "❌ SSH_PASSWORD is empty!"
+            exit 1
+          else
+            echo "✅ SSH_PASSWORD received successfully."
+          fi
       - name: Install yq
         run: |
           VERSION="v4.43.1"
