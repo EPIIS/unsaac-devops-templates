@@ -70,7 +70,7 @@ jobs:
 
           VALUES_FILE="charts/${NAME}/values.yaml"
 
-          yq eval -i "
+          yq eval -y -i "
             .namespace = \"${NAME}\" |
             .deployment.name = \"${NAME}-deployment\" |
             .deployment.namespace = \"${NAME}\" |
@@ -80,7 +80,7 @@ jobs:
             .service.name = \"${NAME}-service\" |
             .service.port = ${SERVICE_PORT} |
             .ingress.name = \"${NAME}-ingress\" |
-            .ingress.path = \"${INGRESS_PATH}\" |
+            .ingress.path = \"${INGRESS_PATH}\" 
           " "$VALUES_FILE"
 
           cat "$VALUES_FILE"
