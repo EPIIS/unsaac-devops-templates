@@ -3,6 +3,10 @@ name: Reusable Deploy Workflow
 on:
   workflow_call:
     inputs:
+      buildContext:
+        description: "Docker build context"
+        type: string
+        required: false
       name:
         description: "App name"
         type: string
@@ -115,8 +119,8 @@ jobs:
 
       - name: Build y save Docker image (solo frontend)
         run: |
-          docker build -t $REGISTRY/${{ inputs.name }}:${{ env.IMAGE_VERSION }} .
-          docker save -o ${{ inputs.name }}.tar $REGISTRY/${{ inputs.name }}:${{ env.IMAGE_VERSION }}
+          docker build -t $REGISTRY/${{ inputs.name }}:${{ env.IMAGE_VERSION }} ${{ inputs.buildContext }}
+          docker save -o ${{ inputs.name }}.tar $REGISTRY/${{ inputs.name }}:${{ env.IMAGE_VERSION }} 
 
       - name: Transferir imagen y chart (solo frontend)
         env:
