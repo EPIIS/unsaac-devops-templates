@@ -1,0 +1,271 @@
+name: Reusable Deploy Workflow
+
+on:
+  workflow_call:
+    inputs:
+      buildContext:
+        description: "Docker build context"
+        type: string
+        required: false
+      name:
+        description: "App name"
+        type: string
+        required: false
+      imagePort:
+        description: "Container port"
+        type: string
+        required: false
+      servicePort:
+        description: "Service port"
+        type: string
+        required: false
+      ingressPath:
+        description: "Ingress path"
+        type: string
+        required: false
+      user:
+        description: "Server user"
+        type: string
+        default: "epiis"
+        required: false
+
+    secrets:
+      SSH_PASSWORD:
+        required: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      SERVER_USER: ${{inputs.user}}
+      REGISTRY: localhost:5000
+      SERVER_HOST: 200.48.82.51
+      SERVER_PATH: /home/${{inputs.user}}/devops/pipeline
+    steps:
+      - name: Checkout caller repo
+        uses: actions/checkout@v4
+
+      - name: Clone external base chart repo
+        run: |
+          git clone https://github.com/EPIIS/unsaac-devops-templates.git
+          mkdir -p charts
+          cp -r unsaac-devops-templates/helm-base-chart/_base charts/_base
+      - name: Debug secret
+        run: |
+          if [ -z "${{ secrets.SSH_PASSWORD }}" ]; then
+            echo "❌ SSH_PASSWORD is empty!"
+            exit 1
+          else
+            echo "✅ SSH_PASSWORD received successfully."
+          fi
+      - name: Install yq
+        run: |
+          VERSION="v4.43.1"
+          BINARY="yq_linux_amd64"
+          wget https://github.com/mikefarah/yq/releases/download/${VERSION}/${BINARY}.tar.gz -O - | \
+            tar xz
+          mv ${BINARY} /usr/local/bin/yq
+          chmod +x /usr/local/bin/yq
+          yq --version
+
+
+      - name: Copy base chart to project chart
+        run: |
+          NAME="${{ inputs.name }}"
+          cp -r charts/_base charts/${NAME}
+          ls -l charts/${NAME}
+          echo "Copiado el chart base a charts/${NAME}"
+
+      - name: Setear versión de imagen (short SHA)
+        run: echo "IMAGE_VERSION=$(echo $GITHUB_SHA | cut -c1-8)" >> $GITHUB_ENV
+
+      - name: Replace values.yaml
+        run: |
+          NAME="${{ inputs.name }}"
+          IMAGE_PORT="${{ inputs.imagePort }}"
+          SERVICE_PORT="${{ inputs.servicePort }}"
+          INGRESS_PATH="${{ inputs.ingressPath }}"
+          IMAGE_VERSION=${{ env.IMAGE_VERSION }}
+
+          VALUES_FILE="charts/${NAME}/values.yaml"
+          echo "Modificando el archivo $VALUES_FILE"
+
+          yq e "
+          .namespace = \"${NAME}\" |
+          .deployment.name = \"${NAME}-deployment\" |
+          .deployment.namespace = \"${NAME}\" |
+          .image.repository = \"localhost:5000/${NAME}\" |
+          .image.tag = \"${IMAGE_VERSION}\" |
+          .image.containerPort = ${IMAGE_PORT} |
+          .service.name = \"${NAME}-service\" |
+          .service.port = ${SERVICE_PORT} |
+          .ingress.name = \"${NAME}-ingress\" |
+          .ingress.path = \"${INGRESS_PATH}\"
+          " -i "$VALUES_FILE"
+
+          cat "$VALUES_FILE"
+
+      - name: Replace Chart.yaml
+        run: |
+          NAME="${{ inputs.name }}"
+          CHART_FILE="charts/${NAME}/Chart.yaml"
+
+          yq eval ".name = \"${NAME}\"" -i "$CHART_FILE"
+
+          cat "$CHART_FILE"
+
+      - name: Instalar sshpass
+        run: sudo apt-get install -y sshpass
+
+      - name: Build y save Docker image (solo frontend)
+        run: |
+          docker build -t $REGISTRY/${{ inputs.name }}:${{ env.IMAGE_VERSION }} ${{ inputs.buildContext }}
+          docker save -o ${{ inputs.name }}.tar $REGISTRY/${{ inputs.name }}:${{ env.IMAGE_VERSION }} 
+
+      - name: Transferir imagen y chart (solo frontend)
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${{ inputs.name }}.tar $SERVER_USER@$SERVER_HOST:$SERVER_PATH/
+          sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no -r charts/${{ inputs.name }} $SERVER_USER@$SERVER_HOST:$SERVER_PATH/helm/
+
+      - name: Load image on server and push to registry
+        env:
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << EOF
+            cd $SERVER_PATH
+            echo "show image name env in EOF"
+            echo "Image name: ${{ inputs.name }}"
+            echo "Image version: ${{ inputs.name }}"
+            echo "Image name with keys: ${{ inputs.name }}"
+            docker load -i ${{ inputs.name }}.tar
+            docker push $REGISTRY/${{ inputs.name }}:${{ env.IMAGE_VERSION }}
+          EOF
+
+      # - name: Deploy with Helm on server
+      #   env:
+      #     IMAGE_NAME: ${{ inputs.name }}
+      #     IMAGE_VERSION: ${{ env.IMAGE_VERSION }}
+      #     SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      #   run: |
+      #     sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST bash << EOF
+      #       set -e
+          
+      #       cd "$SERVER_PATH/helm/$IMAGE_NAME"
+          
+      #       # Extraer el namespace usando yq
+      #       NAMESPACE=\$(grep '^namespace:' values.yaml | awk '{print \$2}')
+      #       echo "✅ Namespace: \$NAMESPACE"
+      #       echo "✅ Image name: $IMAGE_NAME"
+      #       echo "✅ Image version: $IMAGE_VERSION"
+          
+      #       # Crear namespace si no existe
+      #       if ! kubectl get namespace "\$NAMESPACE" >/dev/null 2>&1; then
+      #         echo "🔧 Creando namespace \$NAMESPACE"
+      #         kubectl create namespace "\$NAMESPACE"
+      #         kubectl label namespace "\$NAMESPACE" app.kubernetes.io/managed-by=Helm --overwrite
+      #         kubectl annotate namespace "\$NAMESPACE" \
+      #           meta.helm.sh/release-name="$IMAGE_NAME" \
+      #           meta.helm.sh/release-namespace="\$NAMESPACE" --overwrite
+          
+      #         # Esperar hasta que el namespace esté activo
+      #         for i in {1..10}; do
+      #           status=\$(kubectl get namespace "\$NAMESPACE" -o jsonpath='{.status.phase}')
+      #           if [ "\$status" == "Active" ]; then
+      #             echo "✅ Namespace \$NAMESPACE está activo"
+      #             break
+      #           fi
+      #           echo "⏳ Esperando a que el namespace esté activo..."
+      #           sleep 1
+      #         done
+      #       fi
+          
+      #       # Helm deploy
+      #       helm upgrade --install "$IMAGE_NAME" . \
+      #         --namespace "\$NAMESPACE" \
+      #         --set image.tag="$IMAGE_VERSION"
+      #     EOF
+
+      # - name: Verify Deploy
+      #   env:
+      #     IMAGE_NAME: ${{ inputs.name }}
+      #     SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+      #   run: |
+      #     sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST bash << EOF
+      #       set -e
+          
+      #       echo "✅ Iniciando verificación post-deploy..."
+          
+      #       NAMESPACE=\$(grep '^namespace:' $SERVER_PATH/helm/$IMAGE_NAME/values.yaml | awk '{print \$2}')
+      #       DEPLOYMENT_NAME="\$IMAGE_NAME-deployment"
+          
+      #       echo "🔎 1) Helm release status"
+      #       helm status "\$IMAGE_NAME" -n "\$NAMESPACE"
+          
+      #       echo "🔎 2) Checking pods health"
+      #       NOT_RUNNING=\$(kubectl get pods -n "\$NAMESPACE" --no-headers | awk '{if(\$3 != "Running" && \$3 != "Completed") print}')
+      #       if [ ! -z "\$NOT_RUNNING" ]; then
+      #         echo "❌ Found pods not running:"
+      #         echo "\$NOT_RUNNING"
+      #         exit 1
+      #       else
+      #         echo "✅ All pods are running fine!"
+      #       fi
+          
+      #       echo "✅ Deploy verification completed successfully."
+      #     EOF
+
+#      ### FULLSTACK
+#      - name: Build y save Docker image (frontend y backend)
+#        if: inputs.project_type == 'fullstack'
+#        run: |
+#          docker build -t $REGISTRY/${{ inputs.frontend_name }}:${{ env.IMAGE_VERSION }} ./frontend
+#          docker save -o ${{ inputs.frontend_name }}.tar $REGISTRY/${{ inputs.frontend_name }}:${{ env.IMAGE_VERSION }}
+#          docker build -t $REGISTRY/${{ inputs.backend_name }}:${{ env.IMAGE_VERSION }} ./backend
+#          docker save -o ${{ inputs.backend_name }}.tar $REGISTRY/${{ inputs.backend_name }}:${{ env.IMAGE_VERSION }}
+#
+#      - name: Transferir charts e imágenes (fullstack)
+#        if: inputs.project_type == 'fullstack'
+#        run: |
+#          sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no ${{ inputs.frontend_name }}.tar ${{ inputs.backend_name }}.tar epiis@200.48.82.51:/home/epiis/devops/pipeline/
+#          sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no -r charts/${{ inputs.frontend_name }} charts/${{ inputs.backend_name }} epiis@200.48.82.51:/home/epiis/devops/pipeline/helm/
+#
+#      - name: Modificar charts (fullstack)
+#        if: inputs.project_type == 'fullstack'
+#        run: |
+#          for app in frontend backend; do
+#            NAME_VAR="\${{ inputs["${app}_name"] }}"
+#            PORT_VAR="\${{ inputs["${app}_port"] }}"
+#            PATH_VAR="\${{ inputs["${app}_path"] }}"
+#            sed -i "s/^namespace:.*/namespace: ${{ inputs.name }}/" charts/\$NAME_VAR/values.yaml
+#            sed -i "s/^  name: .*/  name: \$NAME_VAR-deployment/" charts/\$NAME_VAR/values.yaml
+#            sed -i "s/^  namespace: .*/  namespace: ${{ inputs.project_name }}/" charts/\$NAME_VAR/values.yaml
+#            sed -i "s/^  name: .*/  name: \$NAME_VAR-service/" charts/\$NAME_VAR/values.yaml
+#            sed -i "s|^  path: .*|  path: /\$PATH_VAR|" charts/\$NAME_VAR/values.yaml
+#            sed -i "s/^  name: .*/  name: \$NAME_VAR/" charts/\$NAME_VAR/values.yaml
+#            sed -i "s|^  repository: .*|  repository: localhost:5000/\$NAME_VAR|" charts/\$NAME_VAR/values.yaml
+#            sed -i "s/^  tag: .*/  tag: ${{ env.IMAGE_VERSION }}/" charts/\$NAME_VAR/values.yaml
+#            sed -i "s/^  containerPort: .*/  containerPort: \$PORT_VAR/" charts/\$NAME_VAR/values.yaml
+#          done
+#
+#      - name: Desplegar Helm (fullstack)
+#        if: inputs.project_type == 'fullstack'
+#        run: |
+#          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no epiis@200.48.82.51 << EOF
+#            NAMESPACE=${{ inputs.project_name }}
+#            if ! kubectl get namespace \$NAMESPACE >/dev/null 2>&1; then
+#              kubectl create namespace \$NAMESPACE
+#              kubectl label namespace \$NAMESPACE app.kubernetes.io/managed-by=Helm --overwrite
+#              kubectl annotate namespace \$NAMESPACE \
+#                meta.helm.sh/release-name=\$NAMESPACE \
+#                meta.helm.sh/release-namespace=\$NAMESPACE --overwrite
+#            fi
+#            cd /home/epiis/devops/pipeline
+#            docker load -i ${{ inputs.frontend_name }}.tar
+#            docker load -i ${{ inputs.backend_name }}.tar
+#            docker push localhost:5000/${{ inputs.frontend_name }}:${{ env.IMAGE_VERSION }}
+#            docker push localhost:5000/${{ inputs.backend_name }}:${{ env.IMAGE_VERSION }}
+#            helm upgrade --install ${{ inputs.frontend_name }} ./helm/${{ inputs.frontend_name }} --namespace \$NAMESPACE --set image.tag=${{ env.IMAGE_VERSION }}
+#            helm upgrade --install ${{ inputs.backend_name }} ./helm/${{ inputs.backend_name }} --namespace \$NAMESPACE --set image.tag=${{ env.IMAGE_VERSION }}
+#          EOF
