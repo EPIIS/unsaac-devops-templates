@@ -1,6 +1,6 @@
 apiVersion: v2
-name: {{ .Values.namespace }}
-description: Despliegue en el servidor
+name: epiis-app
+description: Helm Chart base para componentes desplegables de proyectos académicos EPIIS
 type: application
-version: 0.1.0
+version: 0.2.0
 appVersion: "1.0"
