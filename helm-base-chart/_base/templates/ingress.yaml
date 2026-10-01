@@ -7,10 +7,11 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: lets-encrypt
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
-    nginx.ingress.kubernetes.io/proxy-connect-timeout: '600'
-    nginx.ingress.kubernetes.io/proxy-send-timeout: '600'
-    nginx.ingress.kubernetes.io/proxy-read-timeout: '600'
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
 spec:
+  ingressClassName: {{ .Values.ingress.className }}
   rules:
     - host: {{ .Values.ingress.host }}
       http:
@@ -22,4 +23,4 @@ spec:
                 name: {{ .Values.service.name }}
                 port:
                   number: {{ .Values.service.port }}
-  {{- end }}
+{{- end }}
