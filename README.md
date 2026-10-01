@@ -74,7 +74,7 @@ MicroK8s
 - `helm-base-chart/_base/`: Helm Chart común utilizado por el workflow.
 - `docs/MANUAL-USO.md`: procedimiento para adaptar y desplegar un proyecto.
 - `docs/ESCENARIOS-SOPORTADOS.md`: explicación de cómo se resuelven las distintas estructuras de proyectos.
-- `docs/DISENO-TECNICO.md`: decisiones técnicas, alcance y contrato de compatibilidad.
+- `docs/ARQUITECTURA.md`: modelo técnico y responsabilidades de cada componente del flujo.
 
 Los workflows `wf-ci-cd-general.yml` y `wf-ci-cd-upload-project.yml` se conservan durante esta etapa para no afectar integraciones existentes. Los nuevos proyectos deben utilizar `reusable-deploy.yml`.
 
