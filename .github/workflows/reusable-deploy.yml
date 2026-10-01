@@ -1,0 +1,379 @@
+name: EPIIS - Reusable Deploy
+
+on:
+  workflow_call:
+    inputs:
+      projectName:
+        description: "Nombre lógico del proyecto. Se usa como namespace de Kubernetes."
+        type: string
+        required: true
+      appName:
+        description: "Nombre del componente desplegable: frontend, backend o microservicio."
+        type: string
+        required: true
+      buildContext:
+        description: "Directorio del componente usado como contexto de docker build."
+        type: string
+        default: "."
+        required: false
+      dockerfile:
+        description: "Dockerfile relativo a buildContext."
+        type: string
+        default: "Dockerfile"
+        required: false
+      containerPort:
+        description: "Puerto en el que escucha la aplicación dentro del contenedor."
+        type: string
+        required: true
+      servicePort:
+        description: "Puerto expuesto por el Service de Kubernetes."
+        type: string
+        default: "80"
+        required: false
+      ingressEnabled:
+        description: "Indica si el componente debe exponerse mediante Ingress."
+        type: boolean
+        default: true
+        required: false
+      ingressPath:
+        description: "Ruta HTTP asignada al componente cuando Ingress está habilitado."
+        type: string
+        default: "/"
+        required: false
+      ingressHost:
+        description: "Host institucional utilizado por Ingress."
+        type: string
+        default: "epiis.unsaac.edu.pe"
+        required: false
+      user:
+        description: "Usuario SSH del servidor institucional."
+        type: string
+        default: "epiis"
+        required: false
+
+    secrets:
+      SSH_PASSWORD:
+        description: "Contraseña SSH utilizada para transferir y desplegar en el servidor."
+        required: true
+      APP_ENV:
+        description: "Contenido opcional de un archivo .env para crear un Secret de Kubernetes."
+        required: false
+
+jobs:
+  deploy:
+    name: Deploy ${{ inputs.projectName }}/${{ inputs.appName }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    concurrency:
+      group: epiis-deploy-${{ inputs.projectName }}-${{ inputs.appName }}
+      cancel-in-progress: false
+
+    env:
+      SERVER_HOST: 200.48.82.51
+      SERVER_USER: ${{ inputs.user }}
+      SERVER_BASE_PATH: /home/${{ inputs.user }}/devops/pipeline
+      REGISTRY: localhost:5000
+
+      PROJECT_NAME: ${{ inputs.projectName }}
+      APP_NAME: ${{ inputs.appName }}
+      BUILD_CONTEXT: ${{ inputs.buildContext }}
+      DOCKERFILE: ${{ inputs.dockerfile }}
+      CONTAINER_PORT: ${{ inputs.containerPort }}
+      SERVICE_PORT: ${{ inputs.servicePort }}
+      INGRESS_ENABLED: ${{ inputs.ingressEnabled }}
+      INGRESS_PATH: ${{ inputs.ingressPath }}
+      INGRESS_HOST: ${{ inputs.ingressHost }}
+
+    steps:
+      - name: Checkout del proyecto que invoca el workflow
+        uses: actions/checkout@v4
+
+      - name: Checkout de las plantillas EPIIS
+        uses: actions/checkout@v4
+        with:
+          repository: EPIIS/unsaac-devops-templates
+          ref: ${{ job.workflow_sha }}
+          path: .epiis-templates
+
+      - name: Validar parámetros del componente
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NAME_REGEX='^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
+          USER_REGEX='^[a-z_][a-z0-9_-]*$'
+
+          if [[ ! "$PROJECT_NAME" =~ $NAME_REGEX ]] || [ "${#PROJECT_NAME}" -gt 63 ]; then
+            echo "ERROR: projectName debe usar minúsculas, números y guiones, iniciar/terminar con alfanumérico y tener máximo 63 caracteres."
+            exit 1
+          fi
+
+          if [[ ! "$APP_NAME" =~ $NAME_REGEX ]] || [ "${#APP_NAME}" -gt 50 ]; then
+            echo "ERROR: appName debe usar minúsculas, números y guiones, iniciar/terminar con alfanumérico y tener máximo 50 caracteres."
+            exit 1
+          fi
+
+          if [[ ! "$SERVER_USER" =~ $USER_REGEX ]]; then
+            echo "ERROR: user contiene caracteres no permitidos."
+            exit 1
+          fi
+
+          if [ ! -d "$BUILD_CONTEXT" ]; then
+            echo "ERROR: buildContext no existe: $BUILD_CONTEXT"
+            exit 1
+          fi
+
+          DOCKERFILE_PATH="$BUILD_CONTEXT/$DOCKERFILE"
+          if [ ! -f "$DOCKERFILE_PATH" ]; then
+            echo "ERROR: no se encontró el Dockerfile: $DOCKERFILE_PATH"
+            exit 1
+          fi
+
+          validate_port() {
+            local value="$1"
+            local label="$2"
+            if [[ ! "$value" =~ ^[0-9]+$ ]] || [ "$value" -lt 1 ] || [ "$value" -gt 65535 ]; then
+              echo "ERROR: $label debe ser un puerto entre 1 y 65535."
+              exit 1
+            fi
+          }
+
+          validate_port "$CONTAINER_PORT" "containerPort"
+          validate_port "$SERVICE_PORT" "servicePort"
+
+          if [ "$INGRESS_ENABLED" = "true" ]; then
+            if [[ ! "$INGRESS_PATH" =~ ^/[A-Za-z0-9._/-]*$ ]]; then
+              echo "ERROR: ingressPath debe iniciar con / y usar caracteres de ruta simples."
+              exit 1
+            fi
+            if [[ ! "$INGRESS_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
+              echo "ERROR: ingressHost no tiene un formato válido."
+              exit 1
+            fi
+          fi
+
+      - name: Preparar configuración opcional de la aplicación
+        shell: bash
+        env:
+          APP_ENV_VALUE: ${{ secrets.APP_ENV }}
+        run: |
+          set -euo pipefail
+
+          ENV_FILE="$RUNNER_TEMP/${PROJECT_NAME}-${APP_NAME}.env"
+          if [ -n "${APP_ENV_VALUE:-}" ]; then
+            printf '%s' "$APP_ENV_VALUE" > "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+            echo "HAS_APP_ENV=true" >> "$GITHUB_ENV"
+            echo "ENV_SECRET_NAME=${APP_NAME}-env" >> "$GITHUB_ENV"
+          else
+            : > "$ENV_FILE"
+            chmod 600 "$ENV_FILE"
+            echo "HAS_APP_ENV=false" >> "$GITHUB_ENV"
+            echo "ENV_SECRET_NAME=" >> "$GITHUB_ENV"
+          fi
+          echo "ENV_FILE=$ENV_FILE" >> "$GITHUB_ENV"
+
+      - name: Preparar Helm Chart y metadatos de despliegue
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          IMAGE_VERSION="${GITHUB_SHA:0:8}"
+          IMAGE_REPOSITORY="$REGISTRY/$PROJECT_NAME/$APP_NAME"
+          TAR_NAME="${PROJECT_NAME}-${APP_NAME}-${IMAGE_VERSION}.tar"
+          CHART_DIR="$RUNNER_TEMP/$APP_NAME"
+
+          rm -rf "$CHART_DIR"
+          cp -R ".epiis-templates/helm-base-chart/_base" "$CHART_DIR"
+
+          cat > "$CHART_DIR/values.deploy.yaml" <<EOF
+          namespace: "$PROJECT_NAME"
+
+          deployment:
+            name: "${APP_NAME}-deployment"
+
+          image:
+            name: "$APP_NAME"
+            repository: "$IMAGE_REPOSITORY"
+            tag: "$IMAGE_VERSION"
+            pullPolicy: IfNotPresent
+            containerPort: $CONTAINER_PORT
+
+          replicaCount: 1
+
+          service:
+            name: "${APP_NAME}-service"
+            type: ClusterIP
+            port: $SERVICE_PORT
+
+          ingress:
+            enabled: $INGRESS_ENABLED
+            name: "${APP_NAME}-ingress"
+            className: "nginx"
+            host: "$INGRESS_HOST"
+            path: "$INGRESS_PATH"
+            pathType: Prefix
+
+          envSecretName: "$ENV_SECRET_NAME"
+
+          resources: {}
+          nodeSelector: {}
+          tolerations: []
+          affinity: {}
+          EOF
+
+          echo "IMAGE_VERSION=$IMAGE_VERSION" >> "$GITHUB_ENV"
+          echo "IMAGE_REPOSITORY=$IMAGE_REPOSITORY" >> "$GITHUB_ENV"
+          echo "TAR_NAME=$TAR_NAME" >> "$GITHUB_ENV"
+          echo "CHART_DIR=$CHART_DIR" >> "$GITHUB_ENV"
+
+      - name: Construir y exportar imagen Docker
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          docker build \
+            -f "$BUILD_CONTEXT/$DOCKERFILE" \
+            -t "$IMAGE_REPOSITORY:$IMAGE_VERSION" \
+            "$BUILD_CONTEXT"
+
+          docker save \
+            -o "$RUNNER_TEMP/$TAR_NAME" \
+            "$IMAGE_REPOSITORY:$IMAGE_VERSION"
+
+      - name: Instalar sshpass
+        shell: bash
+        run: sudo apt-get update && sudo apt-get install -y sshpass
+
+      - name: Preparar directorios en el servidor
+        shell: bash
+        env:
+          SSH_PASSWORD_VALUE: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          sshpass -p "$SSH_PASSWORD_VALUE" ssh \
+            -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" \
+            "mkdir -p '$SERVER_BASE_PATH/images' '$SERVER_BASE_PATH/helm/$PROJECT_NAME' '$SERVER_BASE_PATH/tmp' && rm -rf '$SERVER_BASE_PATH/helm/$PROJECT_NAME/$APP_NAME'"
+
+      - name: Transferir imagen y Helm Chart
+        shell: bash
+        env:
+          SSH_PASSWORD_VALUE: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          sshpass -p "$SSH_PASSWORD_VALUE" scp \
+            -o StrictHostKeyChecking=no \
+            "$RUNNER_TEMP/$TAR_NAME" \
+            "$SERVER_USER@$SERVER_HOST:$SERVER_BASE_PATH/images/$TAR_NAME"
+
+          sshpass -p "$SSH_PASSWORD_VALUE" scp \
+            -o StrictHostKeyChecking=no \
+            -r "$CHART_DIR" \
+            "$SERVER_USER@$SERVER_HOST:$SERVER_BASE_PATH/helm/$PROJECT_NAME/"
+
+          if [ "$HAS_APP_ENV" = "true" ]; then
+            sshpass -p "$SSH_PASSWORD_VALUE" scp \
+              -o StrictHostKeyChecking=no \
+              "$ENV_FILE" \
+              "$SERVER_USER@$SERVER_HOST:$SERVER_BASE_PATH/tmp/${PROJECT_NAME}-${APP_NAME}.env"
+          fi
+
+      - name: Cargar imagen y publicar en el registro local
+        shell: bash
+        env:
+          SSH_PASSWORD_VALUE: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          sshpass -p "$SSH_PASSWORD_VALUE" ssh \
+            -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" <<EOF
+          set -euo pipefail
+
+          docker load -i "$SERVER_BASE_PATH/images/$TAR_NAME"
+          docker push "$IMAGE_REPOSITORY:$IMAGE_VERSION"
+          rm -f "$SERVER_BASE_PATH/images/$TAR_NAME"
+          EOF
+
+      - name: Desplegar componente con Helm
+        shell: bash
+        env:
+          SSH_PASSWORD_VALUE: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          sshpass -p "$SSH_PASSWORD_VALUE" ssh \
+            -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" <<EOF
+          set -euo pipefail
+
+          kubectl create namespace "$PROJECT_NAME" \
+            --dry-run=client \
+            -o yaml | kubectl apply -f -
+
+          if [ "$HAS_APP_ENV" = "true" ]; then
+            trap 'rm -f "$SERVER_BASE_PATH/tmp/${PROJECT_NAME}-${APP_NAME}.env"' EXIT
+
+            kubectl create secret generic "$ENV_SECRET_NAME" \
+              --namespace "$PROJECT_NAME" \
+              --from-env-file="$SERVER_BASE_PATH/tmp/${PROJECT_NAME}-${APP_NAME}.env" \
+              --dry-run=client \
+              -o yaml | kubectl apply -f -
+          fi
+
+          cd "$SERVER_BASE_PATH/helm/$PROJECT_NAME/$APP_NAME"
+
+          helm lint . -f values.deploy.yaml
+
+          helm upgrade --install "$APP_NAME" . \
+            --namespace "$PROJECT_NAME" \
+            -f values.deploy.yaml
+
+          kubectl rollout status \
+            deployment/"${APP_NAME}-deployment" \
+            --namespace "$PROJECT_NAME" \
+            --timeout=180s
+          EOF
+
+      - name: Verificar despliegue
+        shell: bash
+        env:
+          SSH_PASSWORD_VALUE: ${{ secrets.SSH_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          sshpass -p "$SSH_PASSWORD_VALUE" ssh \
+            -o StrictHostKeyChecking=no \
+            "$SERVER_USER@$SERVER_HOST" <<EOF
+          set -euo pipefail
+
+          echo "=== Helm ==="
+          helm status "$APP_NAME" --namespace "$PROJECT_NAME"
+
+          echo "=== Pods ==="
+          kubectl get pods \
+            --namespace "$PROJECT_NAME" \
+            -l "app=${APP_NAME}-deployment"
+
+          echo "=== Service ==="
+          kubectl get service \
+            "${APP_NAME}-service" \
+            --namespace "$PROJECT_NAME"
+
+          if [ "$INGRESS_ENABLED" = "true" ]; then
+            echo "=== Ingress ==="
+            kubectl get ingress \
+              "${APP_NAME}-ingress" \
+              --namespace "$PROJECT_NAME"
+          fi
+          EOF
+
+      - name: Limpiar archivo temporal de configuración
+        if: always()
+        shell: bash
+        run: rm -f "${ENV_FILE:-}"
