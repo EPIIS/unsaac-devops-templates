@@ -6,6 +6,8 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     cert-manager.io/cluster-issuer: lets-encrypt
+    nginx.ingress.kubernetes.io/use-regex: "true"
+    nginx.ingress.kubernetes.io/rewrite-target: "{{ if eq .Values.ingress.internalPath "/" }}/$2{{ else }}{{ .Values.ingress.internalPath }}/$2{{ end }}"
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
     nginx.ingress.kubernetes.io/proxy-connect-timeout: "600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
@@ -16,7 +18,7 @@ spec:
     - host: {{ .Values.ingress.host }}
       http:
         paths:
-          - path: {{ .Values.ingress.path }}
+          - path: {{ .Values.ingress.path }}(/|$)(.*)
             pathType: {{ .Values.ingress.pathType }}
             backend:
               service:
