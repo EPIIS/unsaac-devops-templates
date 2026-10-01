@@ -66,8 +66,9 @@ Todos los componentes del mismo proyecto deben compartir el mismo `projectName` 
 | `containerPort` | Sí | Puerto en el que escucha la aplicación dentro del contenedor. |
 | `servicePort` | No | Puerto expuesto por el Service. Por defecto `80`. |
 | `ingressEnabled` | No | Indica si el componente tendrá Ingress. Por defecto `true`. |
-| `ingressPath` | No | Ruta HTTP asignada al componente. |
-| `ingressHost` | No | Host institucional. Por defecto `epiis.unsaac.edu.pe`. |
+| `ingressPath` | Sí cuando Ingress está habilitado | Ruta pública del componente. Debe ser `/projectName` o comenzar con `/projectName/`. |
+| `internalPath` | No | Ruta base que espera la aplicación dentro del contenedor. Por defecto `/`. |
+| `ingressHost` | No | Host utilizado por Ingress. Por defecto `epiis.unsaac.edu.pe`. |
 | `user` | No | Usuario del servidor. Por defecto `epiis`. |
 
 ## 6. Secretos
@@ -84,7 +85,137 @@ Cuando se proporciona, el workflow crea o actualiza un Secret de Kubernetes llam
 
 No se deben almacenar credenciales en el Dockerfile, en `values.yaml` ni en archivos versionados.
 
-## 7. Invocación mínima
+## 7. Enrutamiento con Service e Ingress
+
+El sistema utiliza un único dominio institucional por defecto:
+
+```text
+epiis.unsaac.edu.pe
+```
+
+Los distintos proyectos y componentes se diferencian mediante rutas.
+
+Ejemplo conceptual:
+
+```text
+epiis.unsaac.edu.pe/tutorias       -> frontend del proyecto Tutorías
+epiis.unsaac.edu.pe/tutorias/api   -> backend principal del proyecto Tutorías
+epiis.unsaac.edu.pe/tutorias/auth  -> servicio de autenticación del proyecto Tutorías
+```
+
+El flujo de una solicitud es:
+
+```text
+Cliente
+  |
+  v
+Ingress
+  |
+  v
+Service de Kubernetes
+  |
+  v
+Pod del componente
+```
+
+El Ingress decide qué Service debe recibir una solicitud utilizando el host y la ruta pública. El Service dirige el tráfico al puerto real del contenedor mediante `targetPort`.
+
+Ejemplo conceptual:
+
+```text
+Solicitud pública:
+/tutorias/api/usuarios
+
+Ingress:
+/tutorias/api -> backend-service
+
+Service:
+puerto 80 -> puerto 8080 del contenedor
+```
+
+### Ruta pública y ruta interna
+
+La plataforma distingue dos conceptos:
+
+- `ingressPath`: ruta pública visible para el usuario.
+- `internalPath`: ruta base que espera realmente la aplicación dentro del contenedor.
+
+El Ingress elimina el prefijo público y reconstruye la ruta que recibe la aplicación.
+
+Ejemplo de backend:
+
+```text
+ingressPath  = /tutorias/api
+internalPath = /api
+
+Solicitud externa:
+/tutorias/api/usuarios
+
+Ruta recibida por el backend:
+/api/usuarios
+```
+
+Ejemplo de frontend:
+
+```text
+ingressPath  = /tutorias
+internalPath = /
+
+Solicitud externa:
+/tutorias/assets/logo.png
+
+Ruta recibida por el contenedor:
+/assets/logo.png
+```
+
+Esto evita obligar a modificar las rutas internas de una API únicamente porque el proyecto se publique debajo de una ruta institucional.
+
+### ¿Es necesario modificar Nginx dentro del proyecto?
+
+No como requisito general del sistema. El Ingress institucional se encarga del enrutamiento y del reemplazo del prefijo público antes de enviar la solicitud al contenedor.
+
+Sin embargo, una aplicación frontend que se publica bajo una subruta debe generar sus enlaces, assets y navegación considerando esa ruta pública. Este comportamiento depende del framework utilizado y no puede ser inferido de forma segura por un workflow genérico.
+
+Por ejemplo, si un frontend se publica en:
+
+```text
+/tutorias
+```
+
+el navegador debe solicitar recursos bajo esa misma base pública, por ejemplo:
+
+```text
+/tutorias/main.js
+/tutorias/assets/logo.png
+```
+
+El proyecto debe configurar el mecanismo de base path propio de su tecnología durante la construcción. En Angular puede resolverse mediante su configuración de base href o una opción equivalente del proceso de build; en React, Vue u otros frameworks se utiliza el mecanismo equivalente para definir la ruta pública base.
+
+Esto no significa que el estudiante deba administrar el Ingress de Kubernetes ni modificar el Nginx institucional. Solo debe asegurarse de que su frontend esté preparado para ejecutarse bajo la ruta pública asignada.
+
+## 8. Convención de rutas
+
+Para evitar colisiones, la implementación utiliza la siguiente convención:
+
+```text
+Frontend principal:       /<projectName>
+Backend principal:        /<projectName>/api
+Otros servicios públicos: /<projectName>/<appName>
+```
+
+Ejemplo:
+
+```text
+Proyecto tutorias
+
+frontend -> /tutorias
+backend  -> /tutorias/api
+auth     -> /tutorias/auth
+```
+
+Un componente interno que no necesita acceso desde Internet debe utilizar `ingressEnabled=false`. El Service continuará disponible dentro del namespace para la comunicación entre componentes.
+
+## 9. Invocación mínima
 
 Cada repositorio debe tener un workflow que invoque al workflow reutilizable.
 
@@ -108,6 +239,7 @@ jobs:
       servicePort: "80"
       ingressEnabled: true
       ingressPath: /nombre-proyecto
+      internalPath: /
     secrets:
       SSH_PASSWORD: ${{ secrets.EPIIS_SSH_PASSWORD }}
       APP_ENV: ${{ secrets.APP_ENV }}
@@ -117,11 +249,29 @@ Si el componente no utiliza `APP_ENV`, se omite esa asignación.
 
 Durante la validación se utiliza la rama `feature/thesis-reusable-deploy-v2`. Después de estabilizar el flujo conviene referenciar una versión estable mediante tag o SHA.
 
-## 8. Un solo componente
+## 10. Un solo componente
 
 Si el repositorio contiene solamente frontend o solamente backend, se realiza una única invocación del workflow.
 
-## 9. Frontend y backend en un mismo repositorio
+Ejemplo conceptual para un frontend:
+
+```text
+projectName = portal-academico
+appName = frontend
+ingressPath = /portal-academico
+internalPath = /
+```
+
+Ejemplo conceptual para un backend cuya API interna comienza en `/api`:
+
+```text
+projectName = tutorias
+appName = backend
+ingressPath = /tutorias/api
+internalPath = /api
+```
+
+## 11. Frontend y backend en un mismo repositorio
 
 No se utiliza un workflow especial para proyectos full stack. El repositorio invoca el workflow reutilizable una vez para el frontend y otra para el backend.
 
@@ -138,13 +288,27 @@ namespace tutorias
 └── backend-deployment
 ```
 
-## 10. Frontend y backend en repositorios separados
+A nivel de acceso público puede utilizarse:
+
+```text
+/tutorias      -> frontend
+/tutorias/api  -> backend
+```
+
+## 12. Frontend y backend en repositorios separados
 
 Cada repositorio invoca el workflow de manera independiente. Para que ambos componentes queden agrupados deben utilizar el mismo `projectName`.
 
 El namespace se crea de manera idempotente: la primera ejecución lo crea y las posteriores lo reutilizan.
 
-## 11. Proyectos con varios servicios backend
+Aunque los repositorios sean diferentes, las rutas pueden compartir la misma estructura pública:
+
+```text
+/tutorias      -> frontend
+/tutorias/api  -> backend
+```
+
+## 13. Proyectos con varios servicios backend
 
 Cada servicio HTTP/API se considera un componente independiente.
 
@@ -162,7 +326,14 @@ Todos se despliegan en el namespace `tutorias`.
 
 Un servicio que solo deba ser consumido desde otros componentes del clúster puede utilizar `ingressEnabled=false`.
 
-## 12. Base de datos y servicios externos
+Si un servicio debe ser público puede asignarse una ruta como:
+
+```text
+/tutorias/auth
+/tutorias/reportes
+```
+
+## 14. Base de datos y servicios externos
 
 La plataforma no aprovisiona bases de datos en la implementación inicial.
 
@@ -170,27 +341,28 @@ Un backend puede consumir SQL Server, PostgreSQL, MySQL, MongoDB u otro servicio
 
 La disponibilidad, respaldo y administración de la base de datos quedan fuera del alcance del workflow.
 
-## 13. Flujo ejecutado
+## 15. Flujo ejecutado
 
 Para cada componente el workflow:
 
 1. obtiene el código del repositorio que lo invoca;
 2. valida parámetros y existencia del Dockerfile;
-3. obtiene el Helm Chart base asociado a la misma revisión del workflow reutilizable;
-4. genera los valores de despliegue;
-5. construye la imagen Docker;
-6. etiqueta la imagen con los primeros ocho caracteres del commit;
-7. exporta la imagen como TAR;
-8. transfiere imagen y Helm Chart al servidor mediante SCP;
-9. ejecuta `docker load` en el servidor;
-10. publica la imagen en `localhost:5000/<projectName>/<appName>:<sha>`;
-11. crea el namespace si todavía no existe;
-12. crea o actualiza el Secret opcional de configuración;
-13. ejecuta `helm upgrade --install`;
-14. espera el resultado del rollout;
-15. verifica Helm, pods, Service e Ingress cuando corresponda.
+3. valida las rutas públicas e internas cuando Ingress está habilitado;
+4. obtiene el Helm Chart base asociado a la misma revisión del workflow reutilizable;
+5. genera los valores de despliegue;
+6. construye la imagen Docker;
+7. etiqueta la imagen con los primeros ocho caracteres del commit;
+8. exporta la imagen como TAR;
+9. transfiere imagen y Helm Chart al servidor mediante SCP;
+10. ejecuta `docker load` en el servidor;
+11. publica la imagen en `localhost:5000/<projectName>/<appName>:<sha>`;
+12. crea el namespace si todavía no existe;
+13. crea o actualiza el Secret opcional de configuración;
+14. ejecuta `helm upgrade --install`;
+15. espera el resultado del rollout;
+16. verifica Helm, pods, Service e Ingress cuando corresponda.
 
-## 14. Límites de la primera implementación
+## 16. Límites de la primera implementación
 
 No forman parte del alcance inicial:
 
@@ -202,7 +374,7 @@ No forman parte del alcance inicial:
 - múltiples ambientes de despliegue;
 - monitoreo o escaneo de vulnerabilidades.
 
-## 15. Verificación básica
+## 17. Verificación básica
 
 Si una ejecución falla, revisar primero:
 
@@ -211,7 +383,9 @@ Si una ejecución falla, revisar primero:
 - que `containerPort` sea el puerto real de la aplicación;
 - que la aplicación escuche en una interfaz accesible desde el contenedor;
 - que `projectName` y `appName` cumplan las reglas de nombres;
-- que la ruta de Ingress sea válida;
+- que `ingressPath` sea `/projectName` o esté debajo de esa ruta;
+- que `internalPath` coincida con la ruta base que espera la aplicación;
+- que un frontend esté construido para utilizar su ruta pública base;
 - que el secreto de acceso al servidor esté configurado;
 - que el backend tenga conectividad hacia sus dependencias externas;
 - que las variables requeridas estén disponibles en `APP_ENV` cuando corresponda.
