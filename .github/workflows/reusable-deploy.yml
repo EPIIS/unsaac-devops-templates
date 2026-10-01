@@ -36,7 +36,12 @@ on:
         default: true
         required: false
       ingressPath:
-        description: "Ruta HTTP asignada al componente cuando Ingress está habilitado."
+        description: "Ruta pública del componente. Debe estar bajo /<projectName>."
+        type: string
+        default: ""
+        required: false
+      internalPath:
+        description: "Ruta base que espera la aplicación dentro del contenedor."
         type: string
         default: "/"
         required: false
@@ -84,6 +89,7 @@ jobs:
       SERVICE_PORT: ${{ inputs.servicePort }}
       INGRESS_ENABLED: ${{ inputs.ingressEnabled }}
       INGRESS_PATH: ${{ inputs.ingressPath }}
+      INTERNAL_PATH: ${{ inputs.internalPath }}
       INGRESS_HOST: ${{ inputs.ingressHost }}
 
     steps:
@@ -104,6 +110,7 @@ jobs:
 
           NAME_REGEX='^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
           USER_REGEX='^[a-z_][a-z0-9_-]*$'
+          PATH_REGEX='^/[A-Za-z0-9._/-]*$'
 
           if [[ ! "$PROJECT_NAME" =~ $NAME_REGEX ]] || [ "${#PROJECT_NAME}" -gt 63 ]; then
             echo "ERROR: projectName debe usar minúsculas, números y guiones, iniciar/terminar con alfanumérico y tener máximo 63 caracteres."
@@ -144,15 +151,55 @@ jobs:
           validate_port "$SERVICE_PORT" "servicePort"
 
           if [ "$INGRESS_ENABLED" = "true" ]; then
-            if [[ ! "$INGRESS_PATH" =~ ^/[A-Za-z0-9._/-]*$ ]]; then
+            if [ -z "$INGRESS_PATH" ]; then
+              echo "ERROR: ingressPath es obligatorio cuando ingressEnabled=true."
+              exit 1
+            fi
+
+            if [[ ! "$INGRESS_PATH" =~ $PATH_REGEX ]]; then
               echo "ERROR: ingressPath debe iniciar con / y usar caracteres de ruta simples."
               exit 1
             fi
+
+            if [ "$INGRESS_PATH" = "/" ]; then
+              echo "ERROR: la ruta raíz / queda reservada. Use una ruta bajo /$PROJECT_NAME."
+              exit 1
+            fi
+
+            case "$INGRESS_PATH" in
+              "/$PROJECT_NAME"|"/$PROJECT_NAME/"*) ;;
+              *)
+                echo "ERROR: ingressPath debe ser /$PROJECT_NAME o comenzar con /$PROJECT_NAME/."
+                exit 1
+                ;;
+            esac
+
+            if [[ ! "$INTERNAL_PATH" =~ $PATH_REGEX ]]; then
+              echo "ERROR: internalPath debe iniciar con / y usar caracteres de ruta simples."
+              exit 1
+            fi
+
             if [[ ! "$INGRESS_HOST" =~ ^[A-Za-z0-9.-]+$ ]]; then
               echo "ERROR: ingressHost no tiene un formato válido."
               exit 1
             fi
+
+            NORMALIZED_INGRESS_PATH="$INGRESS_PATH"
+            if [ "$NORMALIZED_INGRESS_PATH" != "/" ]; then
+              NORMALIZED_INGRESS_PATH="${NORMALIZED_INGRESS_PATH%/}"
+            fi
+
+            NORMALIZED_INTERNAL_PATH="$INTERNAL_PATH"
+            if [ "$NORMALIZED_INTERNAL_PATH" != "/" ]; then
+              NORMALIZED_INTERNAL_PATH="${NORMALIZED_INTERNAL_PATH%/}"
+            fi
+          else
+            NORMALIZED_INGRESS_PATH=""
+            NORMALIZED_INTERNAL_PATH="/"
           fi
+
+          echo "NORMALIZED_INGRESS_PATH=$NORMALIZED_INGRESS_PATH" >> "$GITHUB_ENV"
+          echo "NORMALIZED_INTERNAL_PATH=$NORMALIZED_INTERNAL_PATH" >> "$GITHUB_ENV"
 
       - name: Preparar configuración opcional de la aplicación
         shell: bash
@@ -213,8 +260,9 @@ jobs:
             name: "${APP_NAME}-ingress"
             className: "nginx"
             host: "$INGRESS_HOST"
-            path: "$INGRESS_PATH"
-            pathType: Prefix
+            path: "$NORMALIZED_INGRESS_PATH"
+            internalPath: "$NORMALIZED_INTERNAL_PATH"
+            pathType: ImplementationSpecific
 
           envSecretName: "$ENV_SECRET_NAME"
 
