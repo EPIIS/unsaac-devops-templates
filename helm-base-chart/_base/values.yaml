@@ -1,29 +1,31 @@
-namespace: tfunsaac
+namespace: ejemplo
 
 deployment:
-  name: tfunsaac-deployment
+  name: ejemplo-deployment
 
 image:
-  name: tfunsaac
-  repository: localhost:5000/tfunsaac
+  name: ejemplo
+  repository: localhost:5000/ejemplo/ejemplo
   tag: "latest"
   pullPolicy: IfNotPresent
-  containerPort: 3000
+  containerPort: 8080
 
 replicaCount: 1
 
 service:
-  name: tfunsaac-service
+  name: ejemplo-service
   type: ClusterIP
   port: 80
 
 ingress:
   enabled: true
-  name: tfunsaac-ingress
+  name: ejemplo-ingress
   className: "nginx"
   host: epiis.unsaac.edu.pe
-  path: /tfunsaac
+  path: /ejemplo
   pathType: Prefix
+
+envSecretName: ""
 
 resources: {}
 
