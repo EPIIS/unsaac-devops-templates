@@ -23,7 +23,8 @@ ingress:
   className: "nginx"
   host: epiis.unsaac.edu.pe
   path: /ejemplo
-  pathType: Prefix
+  internalPath: /
+  pathType: ImplementationSpecific
 
 envSecretName: ""
 
