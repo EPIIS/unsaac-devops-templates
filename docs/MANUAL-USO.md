@@ -79,11 +79,245 @@ Es requerido por la implementación actual porque GitHub Actions utiliza SCP y S
 
 ### APP_ENV
 
-Es opcional. Permite proporcionar variables de configuración de la aplicación en formato `CLAVE=valor` sin almacenarlas en el repositorio.
+`APP_ENV` es un secreto opcional utilizado para proporcionar variables de configuración requeridas por la aplicación, como cadenas de conexión a bases de datos, credenciales de servicios externos o parámetros propios del entorno, sin almacenarlas directamente en el repositorio.
 
-Cuando se proporciona, el workflow crea o actualiza un Secret de Kubernetes llamado `<appName>-env` y el Deployment lo consume mediante `envFrom`.
+Cuando un componente requiera estas variables, se debe crear un secreto denominado `APP_ENV` en:
 
-No se deben almacenar credenciales en el Dockerfile, en `values.yaml` ni en archivos versionados.
+`Settings → Secrets and variables → Actions`
+
+dentro del repositorio de GitHub correspondiente al componente.
+
+El contenido del secreto debe utilizar el formato `CLAVE=valor`, pudiendo incluir varias variables en líneas independientes.
+
+Ejemplo:
+
+```env
+PORT=3000
+DB_CNN=mongodb+srv://usuario:password@cluster.mongodb.net/base
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=https://developers.google.com/oauthplayground
+GOOGLE_REFRESH_TOKEN=...
+```
+
+El workflow consumidor debe proporcionar este secreto al workflow reutilizable mediante la sección `secrets`:
+
+```yaml
+secrets:
+  SSH_PASSWORD: ${{ secrets.EPIIS_SSH_PASSWORD }}
+  APP_ENV: ${{ secrets.APP_ENV }}
+```
+
+Por ejemplo, un backend puede utilizar el workflow reutilizable de la siguiente manera:
+
+```yaml
+name: Deploy Backend
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    uses: EPIIS/unsaac-devops-templates/.github/workflows/reusable-deploy.yml@feature/thesis-reusable-deploy-v2
+
+    with:
+      projectName: bunker
+      appName: backend
+      buildContext: .
+      dockerfile: Dockerfile
+      containerPort: "3000"
+      servicePort: "80"
+      ingressEnabled: true
+      ingressPath: /bunker/api
+      internalPath: /
+
+    secrets:
+      SSH_PASSWORD: ${{ secrets.EPIIS_SSH_PASSWORD }}
+      APP_ENV: ${{ secrets.APP_ENV }}
+```
+
+Durante la ejecución, el workflow crea o actualiza automáticamente un Secret de Kubernetes denominado:
+
+```text
+<appName>-env
+```
+
+Por ejemplo, si el componente utiliza:
+
+```yaml
+appName: backend
+```
+
+el Secret generado será:
+
+```text
+backend-env
+```
+
+Este Secret se crea dentro del namespace correspondiente al proyecto y el Deployment lo consume mediante `envFrom`.
+
+De esta forma, las variables quedan disponibles dentro del contenedor utilizando el mecanismo habitual de variables de entorno de cada tecnología.
+
+Por ejemplo, en una aplicación Node.js:
+
+```javascript
+process.env.DB_CNN
+```
+
+La conexión a MongoDB puede realizarse normalmente mediante la variable de entorno:
+
+```javascript
+mongoose.connect(process.env.DB_CNN)
+```
+
+El flujo realizado por la plataforma es el siguiente:
+
+```text
+GitHub Secret APP_ENV
+        ↓
+Workflow consumidor
+        ↓
+Workflow reutilizable
+        ↓
+Archivo temporal de configuración
+        ↓
+Secret de Kubernetes <appName>-env
+        ↓
+Deployment
+        ↓
+Contenedor
+        ↓
+Variables de entorno de la aplicación
+```
+
+Por ejemplo, para un proyecto denominado `bunker` cuyo componente es `backend`, se tendría:
+
+```text
+Proyecto: bunker
+Componente: backend
+Namespace: bunker
+Secret: backend-env
+Deployment: backend-deployment
+```
+
+La aplicación puede acceder a las variables configuradas en `APP_ENV` directamente desde su entorno de ejecución.
+
+### Bases de datos externas
+
+Las bases de datos no son creadas ni administradas por la plataforma de despliegue.
+
+Un backend puede utilizar una base de datos externa siempre que exista conectividad desde la infraestructura institucional hacia dicho servicio y que las credenciales necesarias sean proporcionadas mediante `APP_ENV`.
+
+Por ejemplo:
+
+```env
+DB_CNN=mongodb+srv://usuario:password@cluster.mongodb.net/base
+```
+
+Este mecanismo puede utilizarse para conexiones hacia servicios como:
+
+- MongoDB Atlas.
+- PostgreSQL externo.
+- SQL Server externo.
+- MySQL externo.
+- Otros servicios de persistencia accesibles desde la infraestructura institucional.
+
+Antes de realizar el despliegue, se recomienda verificar que el servidor institucional pueda resolver el dominio y establecer conexión con el servicio externo correspondiente.
+
+La plataforma se encarga del despliegue de la aplicación, pero el aprovisionamiento, configuración y administración de la base de datos permanecen bajo responsabilidad del proyecto que la utiliza.
+
+### Servicios externos
+
+`APP_ENV` también puede utilizarse para proporcionar credenciales o parámetros necesarios para consumir servicios externos.
+
+Por ejemplo, una aplicación que utilice Google Drive API podría requerir:
+
+```env
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+GOOGLE_REDIRECT_URI=https://developers.google.com/oauthplayground
+GOOGLE_REFRESH_TOKEN=...
+```
+
+Estas variables serán proporcionadas al contenedor mediante el mismo Secret de Kubernetes generado durante el despliegue.
+
+En una aplicación Node.js pueden ser utilizadas de la siguiente manera:
+
+```javascript
+const idClient = process.env.GOOGLE_CLIENT_ID
+const secretClient = process.env.GOOGLE_CLIENT_SECRET
+const redirectUri = process.env.GOOGLE_REDIRECT_URI
+const refreshToken = process.env.GOOGLE_REFRESH_TOKEN
+```
+
+### Recomendaciones de seguridad
+
+No se deben almacenar credenciales o información sensible directamente en:
+
+- `Dockerfile`.
+- `values.yaml`.
+- archivos `.env` versionados.
+- código fuente.
+- archivos YAML del workflow.
+- repositorios Git.
+
+Las credenciales deben almacenarse utilizando GitHub Secrets y proporcionarse al workflow reutilizable mediante `APP_ENV`.
+
+El archivo temporal generado durante el despliegue se utiliza únicamente para crear o actualizar el Secret correspondiente en Kubernetes.
+
+El uso de `APP_ENV` permite separar la configuración sensible del código fuente y reutilizar la misma imagen de la aplicación con diferentes configuraciones de ejecución.
+
+### Ejemplo para un backend con MongoDB
+
+Para un backend que utiliza MongoDB, el procedimiento sería:
+
+1. Ingresar al repositorio del backend en GitHub.
+
+2. Ir a:
+
+   `Settings → Secrets and variables → Actions`
+
+3. Crear un nuevo Repository Secret con el nombre:
+
+   ```text
+   APP_ENV
+   ```
+
+4. Colocar como valor las variables requeridas por la aplicación:
+
+   ```env
+   PORT=3000
+   DB_CNN=mongodb+srv://usuario:password@cluster.mongodb.net/base
+   ```
+
+5. En el workflow consumidor agregar:
+
+   ```yaml
+   secrets:
+     SSH_PASSWORD: ${{ secrets.EPIIS_SSH_PASSWORD }}
+     APP_ENV: ${{ secrets.APP_ENV }}
+   ```
+
+6. Ejecutar el workflow.
+
+7. Durante el despliegue se creará automáticamente:
+
+   ```text
+   namespace: bunker
+   secret: backend-env
+   deployment: backend-deployment
+   ```
+
+8. El backend podrá utilizar la cadena de conexión mediante:
+
+   ```javascript
+   process.env.DB_CNN
+   ```
+
+No es necesario copiar manualmente el archivo `.env` al servidor ni incluir las credenciales dentro de la imagen Docker.
 
 ## 7. Enrutamiento con Service e Ingress
 
