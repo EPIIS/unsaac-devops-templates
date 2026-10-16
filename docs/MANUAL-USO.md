@@ -52,7 +52,7 @@ Verifica lo siguiente antes de crear ningún archivo:
 En GitHub entra a tu repositorio y consulta **Settings → General → Default branch** (si tienes permisos). También puedes ver la rama seleccionada en el menú situado encima de la lista de archivos.
 
 - Si la rama principal es **`main`**, sigue los ejemplos sin cambiar ese valor.
-- Si la rama principal es **`master`** o **`develop`**, usa el nombre real de esa rama en los ejemplos que contienen `branches` y `github.ref`.
+- Si la rama principal es **`master`** o **`develop`**, usa el nombre real de esa rama en los ejemplos que contienen `branches` para el evento `push`.
 - **No confundas** la rama de tu proyecto con la rama del repositorio EPIIS: la parte `@main` en `uses: EPIIS/...@main` selecciona la versión del **workflow central**, no la rama de tu aplicación.
 
 ---
@@ -193,8 +193,6 @@ on:
 
 jobs:
   deploy:
-    # Evita que una ejecución manual desde otra rama publique código no aprobado.
-    if: github.ref == 'refs/heads/main'
     uses: EPIIS/unsaac-devops-templates/.github/workflows/reusable-deploy.yml@main
     with:
       projectName: mi-proyecto
@@ -228,7 +226,7 @@ Una vez que `.github/workflows/deploy.yml` esté en la **rama predeterminada** (
 2. Abre la pestaña **Actions**.
 3. En la columna izquierda, elige **Desplegar frontend** (o el nombre de tu workflow).
 4. Selecciona **Run workflow**.
-5. Verifica que el selector **Use workflow from** indique `main`.
+5. En **Use workflow from**, selecciona la rama que contiene la versión de tu aplicación que deseas desplegar (en este ejemplo, `main`).
 6. Pulsa el botón verde **Run workflow**.
 7. Espera a que aparezca la ejecución en la lista y ábrela para consultar cada paso.
 
@@ -242,17 +240,11 @@ Comprueba, en este orden:
 4. GitHub Actions está habilitado y dispones de los permisos adecuados.
 5. Estás abriendo el workflow correcto dentro de la pestaña **Actions**.
 
-GitHub puede permitir elegir otras ramas en el menú de ejecución manual, pero **esta plantilla despliega solo desde `main`** mediante el `if` del job. Si eliges otra rama, el job aparecerá como **Skipped** (omitido): eso es una protección intencional, no necesariamente un error.
+Con `workflow_dispatch`, GitHub permite seleccionar la rama que se va a ejecutar. El ejemplo no incluye filtros adicionales por rama: se desplegará el código de la rama seleccionada. Usa únicamente ramas y credenciales autorizadas por EPIIS.
 
 ### ¿Y si la rama predeterminada no es `main`?
 
-El archivo del workflow debe existir en la rama predeterminada real. Si el despliegue autorizado será desde esa misma rama, cambia, por ejemplo:
-
-```yaml
-if: github.ref == 'refs/heads/develop'
-```
-
-Y, cuando habilites despliegue por `push`, configura la misma rama (`develop`). No cambies el `@main` del workflow central por este motivo.
+El archivo del workflow debe existir en la **rama predeterminada real** para que aparezca el botón de ejecución manual. Puedes seleccionar la rama disponible desde **Run workflow**. Si habilitas despliegue automático por `push`, configura el nombre de esa rama en `on.push.branches`. No cambies el `@main` del workflow central por este motivo.
 
 ---
 
@@ -347,7 +339,6 @@ on:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main'
     uses: EPIIS/unsaac-devops-templates/.github/workflows/reusable-deploy.yml@main
     with:
       projectName: bunker
@@ -384,7 +375,6 @@ on:
 
 jobs:
   deploy:
-    if: github.ref == 'refs/heads/main'
     uses: EPIIS/unsaac-devops-templates/.github/workflows/reusable-deploy.yml@main
     with:
       projectName: bunker
@@ -460,15 +450,7 @@ Ahora ocurrirán dos cosas:
 - El usuario podrá ejecutar manualmente el workflow desde la pestaña Actions.
 - Cada **push** que actualice `main` iniciará un nuevo despliegue, incluida la integración de un pull request en `main` si produce un nuevo commit.
 
-Si quieres evitar despliegues desde ramas no autorizadas, conserva también:
-
-```yaml
-jobs:
-  deploy:
-    if: github.ref == 'refs/heads/main'
-    uses: EPIIS/unsaac-devops-templates/.github/workflows/reusable-deploy.yml@main
-    # ...resto de la configuración...
-```
+No es necesario agregar condiciones al job. En este ejemplo, el evento `push` solo inicia despliegues automáticos al actualizar `main`, mientras que `workflow_dispatch` permite ejecutar manualmente desde la rama seleccionada. El estudiante debe disponer de autorización para desplegar en el servidor EPIIS.
 
 **Atención:** al guardar en `main` un archivo que incluya `push` a `main`, ese mismo commit puede activar una ejecución. Configura **los secretos antes de hacer el commit** y comprueba que el YAML esté correcto.
 
@@ -502,12 +484,12 @@ Este workflow opcional solo comprueba que se pueda **construir** una imagen Dock
 
 | Configuración | Cuándo se ejecuta | ¿Despliega? |
 |---|---|---|
-| `workflow_dispatch` | Cuando un usuario autorizado pulsa **Run workflow**. | Sí, si el job está permitido. |
+| `workflow_dispatch` | Cuando un usuario autorizado pulsa **Run workflow**. | Sí, desde la rama seleccionada. |
 | `push` a `main` | Cuando se sube o integra un commit a `main`. | Sí, con el job de despliegue. |
 | `pull_request` en `validar-pr.yml` | Cuando se abre o actualiza un PR hacia `main`. | No; solamente valida la construcción en nuestro ejemplo. |
 | `push` a `feature/*` | Cuando se sube código a una rama de trabajo. | No, con los ejemplos de este manual. |
 
-**¿Debe estar el workflow en `main`?** Para que el botón de ejecución manual esté disponible, **la definición con `workflow_dispatch` debe existir en la rama predeterminada**. La rama de ejecución se puede elegir cuando GitHub lo permita, pero nuestras plantillas restringen el despliegue a `main`. Con `push`, GitHub responde al evento y a las ramas que declares, sin exigir que todo push ocurra en la predeterminada.
+**¿Debe estar el workflow en `main`?** Para que aparezca el botón de ejecución manual, la definición con `workflow_dispatch` debe existir en la **rama predeterminada**, que en estos ejemplos es `main`. En **Run workflow** puedes elegir la rama del proyecto que deseas ejecutar, siempre que el archivo esté disponible allí. El evento `push` se activa solo para las ramas indicadas en `on.push.branches`.
 
 ---
 
@@ -526,7 +508,6 @@ on:
 
 jobs:
   frontend:
-    if: github.ref == 'refs/heads/main'
     uses: EPIIS/unsaac-devops-templates/.github/workflows/reusable-deploy.yml@main
     with:
       projectName: tutorias
@@ -540,7 +521,6 @@ jobs:
       SSH_PASSWORD: ${{ secrets.EPIIS_SSH_PASSWORD }}
 
   backend:
-    if: github.ref == 'refs/heads/main'
     uses: EPIIS/unsaac-devops-templates/.github/workflows/reusable-deploy.yml@main
     with:
       projectName: tutorias
@@ -582,7 +562,6 @@ Este es un **fragmento del bloque `with`**, no un archivo YAML independiente. Se
 | Lo que observas | Causa probable | Qué revisar |
 |---|---|---|
 | No aparece **Run workflow** | No existe `workflow_dispatch` en la rama predeterminada, archivo mal ubicado o Actions deshabilitado. | Ruta `.github/workflows/deploy.yml`, rama predeterminada y permisos. |
-| Job **Skipped** | Elegiste una rama distinta de `main` y el job tiene `if: github.ref == 'refs/heads/main'`. | Ejecuta seleccionando `main` o consulta al administrador. |
 | `buildContext no existe` | La carpeta indicada no está en tu repositorio. | Usa `.` si el Dockerfile está en la raíz o la carpeta correcta. |
 | `no se encontró el Dockerfile` | Ruta/capitalización incorrecta del archivo. | Confirma dónde está `Dockerfile` y sus mayúsculas. |
 | `docker build` falla | Dependencias, comandos o configuración incorrecta de tu aplicación. | Prueba el Dockerfile; lee el paso de construcción en Actions. |
